@@ -1,0 +1,174 @@
+// Import the functions you need from the Firebase SDKs you need
+import { initializeApp } from 'firebase/app';
+import { getStorage } from 'firebase/storage';
+
+// Your web app's Firebase configuration
+const firebaseConfig = {
+  apiKey: 'YOUR_API_KEY',
+  authDomain: 'YOUR_AUTH_DOMAIN',
+  projectId: 'YOUR_PROJECT_ID',
+  storageBucket: 'YOUR_STORAGE_BUCKET',
+  messagingSenderId: 'YOUR_MESSAGING_SENDER_ID',
+  appId: 'YOUR_APP_ID'
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+
+// Initialize Firebase Storage
+const storage = getStorage(app);
+
+export { app, storage };
+
+
+
+
+
+
+
+<template>
+  <div>
+    <input type="text" v-model="title" placeholder="Title" />
+    <input type="text" v-model="description" placeholder="Description" />
+    
+    <!-- Input for selecting images -->
+    <input type="file" @change="onFileChange" multiple />
+
+    <!-- Preview selected images and display upload progress -->
+    <div v-if="previewImages.length > 0" class="image-preview">
+      <div v-for="(previewUrl, index) in previewImages" :key="index" class="image-preview-item">
+        <img :src="previewUrl" alt="Preview" class="preview-image" />
+        <button @click="cancelImage(index)" class="cancel-button">Cancel</button>
+        <p v-if="progress[index] !== undefined">Progress: {{ progress[index] }}%</p>
+      </div>
+    </div>
+
+    <!-- Validation message -->
+    <p v-if="files.length > 5" style="color: red;">Please select up to 5 images.</p>
+
+    <!-- Upload button -->
+    <button @click="uploadImages">Upload</button>
+  </div>
+</template>
+
+<script setup>
+import { ref, reactive } from 'vue';
+import { ref as storageRef, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { storage } from './firebaseConfig';
+import axios from 'axios';
+
+const title = ref('');
+const description = ref('');
+const files = ref([]);
+const previewImages = reactive([]);
+const progress = reactive([]);
+
+// Handle file selection
+const onFileChange = (event) => {
+  const selectedFiles = Array.from(event.target.files).slice(0, 5 - files.value.length);
+
+  // Preview selected images
+  selectedFiles.forEach((file) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      previewImages.push(e.target.result);
+    };
+    reader.readAsDataURL(file);
+  });
+
+  // Add selected files to files array
+  files.value.push(...selectedFiles);
+};
+
+// Cancel selected image
+const cancelImage = (index) => {
+  previewImages.splice(index, 1);
+  files.value.splice(index, 1);
+  progress.splice(index, 1);
+};
+
+// Upload images and data to backend
+const uploadImages = async () => {
+  // Validate number of selected files
+  if (files.value.length === 0 || files.value.length > 5) {
+    alert('Please select up to 5 images.');
+    return;
+  }
+
+  try {
+    // Upload each file to Firebase Storage and get the download URL
+    const imageUrls = await Promise.all(
+      files.value.map((file, index) => new Promise((resolve, reject) => {
+        const fileRef = storageRef(storage, `images/${file.name}`);
+        const uploadTask = uploadBytesResumable(fileRef, file);
+
+        uploadTask.on('state_changed', 
+          (snapshot) => {
+            // Calculate and update upload progress
+            const percent = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+            progress[index] = Math.round(percent);
+          }, 
+          (error) => {
+            console.error('Upload error:', error);
+            reject(error);
+          }, 
+          async () => {
+            // Get the download URL after upload is complete
+            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+            resolve(downloadURL);
+          }
+        );
+      }))
+    );
+
+    // Create the payload with title, description, and image URLs
+    const payload = {
+      title: title.value,
+      description: description.value,
+      images: imageUrls
+    };
+
+    // Send the payload to the backend API
+    await axios.post('http://localhost:3000/save-images', payload);
+    console.log('Images uploaded and data saved:', payload);
+
+    // Clear form and preview after successful upload
+    title.value = '';
+    description.value = '';
+    files.value = [];
+    previewImages.splice(0);
+    progress.splice(0);
+  } catch (err) {
+    console.error('Error uploading images:', err);
+  }
+};
+</script>
+
+<style scoped>
+.image-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.image-preview-item {
+  position: relative;
+}
+
+.preview-image {
+  width: 150px;
+  height: 150px;
+  object-fit: cover;
+}
+
+.cancel-button {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  padding: 5px 10px;
+  background-color: red;
+  color: white;
+  border: none;
+  cursor: pointer;
+}
+</style>
